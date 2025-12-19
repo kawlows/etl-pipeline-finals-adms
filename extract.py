@@ -1,59 +1,65 @@
 import pandas as pd
 import sqlite3
-from forex_python.converter import CurrencyRates
+import os
+import glob
+from pathlib import Path
 
 
-def transform_data():
-    """
-    Clean and standardize data from staging tables.
-    Convert JPY prices to USD for standardization.
-    """
-    db_path = "etl_database.db"
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
+def load_csv_to_staging():
+    """Extract CSV files from source and load into SQLite staging area."""
     try:
-        # Get currency converter (mock rate if API unavailable: 1 USD = 150 JPY)
-        try:
-            c = CurrencyRates()
-            jpy_to_usd_rate = c.get_rate("JPY", "USD")
-        except Exception:
-            # Fallback rate if API is unavailable
-            jpy_to_usd_rate = 1 / 150  # ~0.0067
+        # Create database connection
+        db_path = "etl_database.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
 
-        # Process Japan items - convert prices from JPY to USD
-        print("Transforming Japan items data...")
-        japan_items = pd.read_sql_query("SELECT * FROM japan_japan_items", conn)
-        if "price" in japan_items.columns:
-            japan_items["price"] = japan_items["price"] * jpy_to_usd_rate
-            japan_items["currency"] = "USD"
-        japan_items.to_sql("japan_items_transformed", conn, if_exists="replace", index=False)
+        # Define source paths
+        japan_source = "data/source/japan_store"
+        myanmar_source = "data/source/myanmar_store"
 
-        # Process Myanmar items (already in USD, no conversion needed)
-        print("Transforming Myanmar items data...")
-        myanmar_items = pd.read_sql_query("SELECT * FROM myanmar_myanmar_items", conn)
-        if "price" in myanmar_items.columns:
-            myanmar_items["currency"] = "USD"
-        myanmar_items.to_sql("myanmar_items_transformed", conn, if_exists="replace", index=False)
+        # Check if source directories exist
+        if not os.path.exists(japan_source):
+            print(f"Warning: {japan_source} not found")
+        if not os.path.exists(myanmar_source):
+            print(f"Warning: {myanmar_source} not found")
 
-        # Clean and transform sales data
-        print("Transforming Japan sales data...")
-        japan_sales = pd.read_sql_query("SELECT * FROM japan_sales_data", conn)
-        japan_sales = japan_sales.dropna(subset=["id"])
-        japan_sales["store"] = "Japan"
-        japan_sales.to_sql("japan_sales_transformed", conn, if_exists="replace", index=False)
+        # Process Japan store files
+        japan_files = glob.glob(f"{japan_source}/*.csv")
+        if japan_files:
+            print(f"Loading {len(japan_files)} file(s) from Japan store...")
+            for csv_file in japan_files:
+                try:
+                    table_name = Path(csv_file).stem
+                    df = pd.read_csv(csv_file)
+                    print(f" -> {table_name} ({len(df)} rows)")
+                    df.to_sql(f"japan_{table_name}", conn, if_exists="replace", index=False)
+                except Exception as e:
+                    print(f" ERROR loading {csv_file}: {e}")
+        else:
+            print(f"No CSV files found in {japan_source}")
 
-        print("Transforming Myanmar sales data...")
-        myanmar_sales = pd.read_sql_query("SELECT * FROM myanmar_sales_data", conn)
-        myanmar_sales = myanmar_sales.dropna(subset=["id"])
-        myanmar_sales["store"] = "Myanmar"
-        myanmar_sales.to_sql("myanmar_sales_transformed", conn, if_exists="replace", index=False)
+        # Process Myanmar store files
+        myanmar_files = glob.glob(f"{myanmar_source}/*.csv")
+        if myanmar_files:
+            print(f"Loading {len(myanmar_files)} file(s) from Myanmar store...")
+            for csv_file in myanmar_files:
+                try:
+                    table_name = Path(csv_file).stem
+                    df = pd.read_csv(csv_file)
+                    print(f" -> {table_name} ({len(df)} rows)")
+                    df.to_sql(f"myanmar_{table_name}", conn, if_exists="replace", index=False)
+                except Exception as e:
+                    print(f" ERROR loading {csv_file}: {e}")
+        else:
+            print(f"No CSV files found in {myanmar_source}")
 
         conn.commit()
-        print("Data transformation completed successfully!")
-    finally:
         conn.close()
+        print("\n✓ Staging complete!")
+    except Exception as e:
+        print(f"ERROR: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    transform_data()
+    load_csv_to_staging()
